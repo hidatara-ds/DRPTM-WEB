@@ -11,16 +11,55 @@ export async function registerRoutes(app: Express): Promise<void> {
   // Health check endpoint for debugging
   app.get("/api/health", async (req, res) => {
     try {
+      const systemStatus = await storage.getSystemStatus();
+      const readings = await storage.getSensorReadings(1);
+      
       res.json({
         status: "ok",
         timestamp: new Date().toISOString(),
         environment: process.env.NODE_ENV || "development",
         databaseAvailable: !!process.env.DATABASE_URL,
-        externalApiConfigured: !!(process.env.EXTERNAL_DB_API_URL && process.env.EXTERNAL_DB_API_KEY)
+        externalApiConfigured: !!(process.env.EXTERNAL_DB_API_URL && process.env.EXTERNAL_DB_API_KEY),
+        systemStatus: systemStatus,
+        hasReadings: readings.length > 0,
+        readingsCount: readings.length,
+        latestReading: readings[0] || null
       });
     } catch (error) {
       console.error("Health check error:", error);
-      res.status(500).json({ error: "Health check failed" });
+      res.status(500).json({ 
+        error: "Health check failed",
+        details: process.env.NODE_ENV === 'development' ? (error as Error).message : undefined
+      });
+    }
+  });
+
+  // Debug endpoint to test data directly
+  app.get("/api/debug", async (req, res) => {
+    try {
+      console.log("🔍 Debug endpoint called");
+      const readings = await storage.getSensorReadings(5);
+      console.log("🔍 Debug - readings count:", readings.length);
+      console.log("🔍 Debug - readings:", readings);
+      
+      res.json({
+        message: "Debug data",
+        timestamp: new Date().toISOString(),
+        readingsCount: readings.length,
+        readings: readings,
+        environment: {
+          NODE_ENV: process.env.NODE_ENV,
+          DATABASE_URL: !!process.env.DATABASE_URL,
+          EXTERNAL_DB_API_URL: !!process.env.EXTERNAL_DB_API_URL,
+          EXTERNAL_DB_API_KEY: !!process.env.EXTERNAL_DB_API_KEY
+        }
+      });
+    } catch (error) {
+      console.error("Debug endpoint error:", error);
+      res.status(500).json({ 
+        error: "Debug failed",
+        details: process.env.NODE_ENV === 'development' ? (error as Error).message : undefined
+      });
     }
   });
 

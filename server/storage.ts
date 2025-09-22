@@ -44,6 +44,9 @@ export class DatabaseStorage implements IStorage {
   };
 
   constructor() {
+    // Always initialize fallback data first
+    this.initializeFallbackData();
+    
     // Initialize defaults safely
     this.initializeDefaults().catch(() => {
       console.log('🔄 Running in fallback mode without database persistence');
@@ -81,9 +84,26 @@ export class DatabaseStorage implements IStorage {
           temperature: 25.1,
           ph: 5.9,
           tdsLevel: 980
+        },
+        {
+          id: `sample_${now.getTime() - 3}`,
+          timestamp: new Date(now.getTime() - 240000), // 4 minutes ago
+          createdAt: new Date(now.getTime() - 240000),
+          temperature: 25.3,
+          ph: 6.2,
+          tdsLevel: 960
+        },
+        {
+          id: `sample_${now.getTime() - 4}`,
+          timestamp: new Date(now.getTime() - 300000), // 5 minutes ago
+          createdAt: new Date(now.getTime() - 300000),
+          temperature: 24.9,
+          ph: 6.0,
+          tdsLevel: 940
         }
       ];
       this.fallbackData.sensorReadings = sampleReadings;
+      console.log('✅ Fallback data initialized with', sampleReadings.length, 'readings');
     }
   }
 
@@ -224,10 +244,17 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getSensorReadings(limit = 50): Promise<SensorReading[]> {
+    console.log('🔍 getSensorReadings called with limit:', limit);
+    console.log('🔍 Database available:', this.databaseAvailable);
+    console.log('🔍 NODE_ENV:', process.env.NODE_ENV);
+    console.log('🔍 DATABASE_URL exists:', !!process.env.DATABASE_URL);
+    console.log('🔍 EXTERNAL_DB_API_URL exists:', !!process.env.EXTERNAL_DB_API_URL);
+
     // Try to get fresh data from external source
     await this.fetchFromExternalDatabase();
 
     if (!this.databaseAvailable) {
+      console.log('🔄 Database not available, using fallback data');
       // Return fallback data if no database
       this.initializeFallbackData();
       return this.fallbackData.sensorReadings.slice(0, limit);
@@ -269,6 +296,7 @@ export class DatabaseStorage implements IStorage {
           // In production, return in-memory fallback instead of persisting
           console.log('No data available, using in-memory fallback (production mode)');
           this.initializeFallbackData();
+          console.log('📊 Returning fallback data:', this.fallbackData.sensorReadings.length, 'readings');
           return this.fallbackData.sensorReadings.slice(0, limit);
         }
       }
@@ -278,6 +306,7 @@ export class DatabaseStorage implements IStorage {
       console.warn('Database error, falling back to sample data:', (error as Error).message);
       this.databaseAvailable = false;
       this.initializeFallbackData();
+      console.log('📊 Returning fallback data after error:', this.fallbackData.sensorReadings.length, 'readings');
       return this.fallbackData.sensorReadings.slice(0, limit);
     }
   }
