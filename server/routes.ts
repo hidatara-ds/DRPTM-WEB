@@ -1,5 +1,4 @@
 import type { Express } from "express";
-import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import {
   insertSensorReadingSchema,
@@ -8,16 +7,37 @@ import {
 } from "@shared/schema";
 
 
-export async function registerRoutes(app: Express): Promise<Server> {
+export async function registerRoutes(app: Express): Promise<void> {
+  // Health check endpoint for debugging
+  app.get("/api/health", async (req, res) => {
+    try {
+      res.json({
+        status: "ok",
+        timestamp: new Date().toISOString(),
+        environment: process.env.NODE_ENV || "development",
+        databaseAvailable: !!process.env.DATABASE_URL,
+        externalApiConfigured: !!(process.env.EXTERNAL_DB_API_URL && process.env.EXTERNAL_DB_API_KEY)
+      });
+    } catch (error) {
+      console.error("Health check error:", error);
+      res.status(500).json({ error: "Health check failed" });
+    }
+  });
+
   // Get recent sensor readings
   app.get("/api/sensor-readings", async (req, res) => {
     try {
+      console.log("Fetching sensor readings...");
       const limit = req.query.limit ? parseInt(req.query.limit as string) : 50;
       const readings = await storage.getSensorReadings(limit);
+      console.log(`Retrieved ${readings.length} sensor readings`);
       res.json(readings);
     } catch (error) {
       console.error("Error fetching sensor readings:", error);
-      res.status(500).json({ error: "Failed to fetch sensor readings" });
+      res.status(500).json({ 
+        error: "Failed to fetch sensor readings",
+        details: process.env.NODE_ENV === 'development' ? (error as Error).message : undefined
+      });
     }
   });
 
@@ -167,18 +187,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  const httpServer = createServer(app);
-
-  // Set up periodic data collection from External Database
-  setInterval(async () => {
-    try {
-      // This will automatically fetch fresh data from external database
-      await storage.getSensorReadings(1);
-    } catch (error) {
-      console.error("Error in periodic data collection:", error);
-      await storage.updateSystemStatus({ connectionStatus: "error" });
-    }
-  }, 30000); // Collect data every 30 seconds instead of 10
-
-  return httpServer;
+  // Note: HTTP server and periodic tasks are handled by the main server
+  // In Vercel functions, we only register the routes
 }
