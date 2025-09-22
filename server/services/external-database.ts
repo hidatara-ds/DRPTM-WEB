@@ -192,6 +192,6 @@ export class ExternalDatabaseService {
 
 export const externalDatabaseService = new ExternalDatabaseService(
   process.env.EXTERNAL_DB_API_URL ||
-    "https://kedairekagreenhouse.my.id/api/latest-readings/HZ1",
+    "https://web-production-e195b.up.railway.app/api/latest-readings/HZ1",
   process.env.EXTERNAL_DB_API_KEY || "ithinkyouthinktoomuchofme"
 );
