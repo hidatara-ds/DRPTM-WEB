@@ -4,6 +4,18 @@ import { registerRoutes } from "../server/routes";
 
 const app = express();
 
+// Disable ETag and caching to avoid 304 on serverless
+app.set('etag', false);
+app.use((_req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  res.setHeader('Surrogate-Control', 'no-store');
+  res.setHeader('CDN-Cache-Control', 'no-store');
+  res.setHeader('Vercel-CDN-Cache-Control', 'no-store');
+  next();
+});
+
 // Enable CORS for Vercel
 app.use(cors({
   origin: true,

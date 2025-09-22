@@ -70,6 +70,12 @@ export async function registerRoutes(app: Express): Promise<void> {
       const limit = req.query.limit ? parseInt(req.query.limit as string) : 50;
       const readings = await storage.getSensorReadings(limit);
       console.log(`Retrieved ${readings.length} sensor readings`);
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+      res.setHeader('Surrogate-Control', 'no-store');
+      res.setHeader('CDN-Cache-Control', 'no-store');
+      res.setHeader('Vercel-CDN-Cache-Control', 'no-store');
       res.json(readings);
     } catch (error) {
       console.error("Error fetching sensor readings:", error);
@@ -107,6 +113,12 @@ export async function registerRoutes(app: Express): Promise<void> {
     try {
       const readings = await storage.getSensorReadings(1);
       const latest = readings[0] || null;
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+      res.setHeader('Surrogate-Control', 'no-store');
+      res.setHeader('CDN-Cache-Control', 'no-store');
+      res.setHeader('Vercel-CDN-Cache-Control', 'no-store');
       res.json(latest);
     } catch (error) {
       console.error("Error fetching latest sensor reading:", error);
@@ -155,6 +167,12 @@ export async function registerRoutes(app: Express): Promise<void> {
   app.get("/api/system-status", async (req, res) => {
     try {
       const status = await storage.getSystemStatus();
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+      res.setHeader('Surrogate-Control', 'no-store');
+      res.setHeader('CDN-Cache-Control', 'no-store');
+      res.setHeader('Vercel-CDN-Cache-Control', 'no-store');
       res.json(status);
     } catch (error) {
       console.error("Error fetching system status:", error);

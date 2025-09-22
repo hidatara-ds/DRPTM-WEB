@@ -9,10 +9,14 @@ export interface ExternalDatabaseReading {
 export class ExternalDatabaseService {
   private apiUrl: string;
   private apiKey: string;
+  private cfAccessClientId?: string;
+  private cfAccessClientSecret?: string;
 
   constructor(apiUrl: string, apiKey: string) {
     this.apiUrl = apiUrl;
     this.apiKey = apiKey;
+    this.cfAccessClientId = process.env.CF_ACCESS_CLIENT_ID;
+    this.cfAccessClientSecret = process.env.CF_ACCESS_CLIENT_SECRET;
   }
 
   // Decode HEX data based on device code
@@ -70,23 +74,54 @@ export class ExternalDatabaseService {
   async fetchLatestReading(): Promise<ExternalDatabaseReading | null> {
     try {
       console.log(`Fetching data from: ${this.apiUrl}`);
-      // Implement timeout using AbortController with shorter timeout
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
-      let response;
-      try {
-        response = await fetch(this.apiUrl, {
-          method: "GET",
-          headers: {
+      // Implement timeout using AbortController with longer timeout and basic retry
+      const attemptFetch = async (attempt: number) => {
+        const controller = new AbortController();
+        const timeoutMs = 10000; // 10s per attempt
+        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+          const headers: Record<string, string> = {
             "X-API-KEY": this.apiKey,
             "Content-Type": "application/json",
             Accept: "application/json",
             "User-Agent": "HydroMonitor/1.0",
-          },
-          signal: controller.signal,
-        });
-      } finally {
-        clearTimeout(timeoutId);
+          };
+          if (this.cfAccessClientId && this.cfAccessClientSecret) {
+            headers["CF-Access-Client-Id"] = this.cfAccessClientId;
+            headers["CF-Access-Client-Secret"] = this.cfAccessClientSecret;
+          }
+
+          const res = await fetch(this.apiUrl, {
+            method: "GET",
+            headers,
+            redirect: "follow",
+            signal: controller.signal,
+          });
+          return res;
+        } catch (err) {
+          if (err instanceof Error && err.name === 'AbortError') {
+            console.error(`Request timeout after ${timeoutMs}ms on attempt ${attempt}`);
+          }
+          throw err;
+        } finally {
+          clearTimeout(timeoutId);
+        }
+      };
+
+      let response: any = null;
+      const maxAttempts = 2;
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+          response = await attemptFetch(attempt);
+          break;
+        } catch (e) {
+          if (attempt === maxAttempts) throw e;
+          await new Promise(r => setTimeout(r, 300 * attempt));
+        }
+      }
+
+      if (!response) {
+        throw new Error("No response received from external database");
       }
 
       console.log(`Response status: ${response.status} ${response.statusText}`);
