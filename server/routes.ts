@@ -178,7 +178,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.error("Error in periodic data collection:", error);
       await storage.updateSystemStatus({ connectionStatus: "error" });
     }
-  }, 10000); // Collect data every 10 seconds
+  }, 30000); // Collect data every 30 seconds instead of 10
 
   return httpServer;
 }

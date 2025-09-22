@@ -26,7 +26,7 @@ export class DatabaseStorage implements IStorage {
   private fallbackData = {
     systemStatus: {
       id: 'fallback',
-      connectionStatus: 'disconnected' as const,
+      connectionStatus: 'error' as const,
       lastUpdate: new Date(),
       dataPoints: 0,
       cpuUsage: 23,
@@ -56,15 +56,34 @@ export class DatabaseStorage implements IStorage {
     // Always ensure we have sample data in fallback mode
     if (this.fallbackData.sensorReadings.length === 0) {
       console.log('🔄 Initializing fallback sample data');
-      const sampleReading: SensorReading = {
-        id: `sample_${Date.now()}`,
-        timestamp: new Date(),
-        createdAt: new Date(),
-        temperature: 25.5,
-        ph: 6.8,
-        tdsLevel: 450
-      };
-      this.fallbackData.sensorReadings = [sampleReading];
+      const now = new Date();
+      const sampleReadings: SensorReading[] = [
+        {
+          id: `sample_${now.getTime()}`,
+          timestamp: new Date(now.getTime() - 60000), // 1 minute ago
+          createdAt: new Date(now.getTime() - 60000),
+          temperature: 24.2,
+          ph: 6.1,
+          tdsLevel: 950
+        },
+        {
+          id: `sample_${now.getTime() - 1}`,
+          timestamp: new Date(now.getTime() - 120000), // 2 minutes ago
+          createdAt: new Date(now.getTime() - 120000),
+          temperature: 24.8,
+          ph: 6.0,
+          tdsLevel: 920
+        },
+        {
+          id: `sample_${now.getTime() - 2}`,
+          timestamp: new Date(now.getTime() - 180000), // 3 minutes ago
+          createdAt: new Date(now.getTime() - 180000),
+          temperature: 25.1,
+          ph: 5.9,
+          tdsLevel: 980
+        }
+      ];
+      this.fallbackData.sensorReadings = sampleReadings;
     }
   }
 
@@ -142,11 +161,16 @@ export class DatabaseStorage implements IStorage {
 
       if (!externalData) {
         console.warn('No data received from external database');
+        // Update system status to indicate connection error
+        await this.updateSystemStatus({ connectionStatus: 'error' });
         return null;
       }
 
       // Update fetch time immediately after successful external fetch
       this.lastExternalFetchTime = now;
+
+      // Update system status to indicate successful connection
+      await this.updateSystemStatus({ connectionStatus: 'connected' });
 
       // Insert new reading into database only if available
       if (available && db) {
@@ -191,6 +215,8 @@ export class DatabaseStorage implements IStorage {
       return reading;
     } catch (error) {
       console.error("Error fetching from external database:", error);
+      // Update system status to indicate connection error
+      await this.updateSystemStatus({ connectionStatus: 'error' });
       // Ensure we have fallback data even when external fetch fails
       this.initializeFallbackData();
       return null;

@@ -78,17 +78,23 @@ export default function Dashboard() {
     SensorReading[]
   >({
     queryKey: ["/api/sensor-readings"],
-    refetchInterval: 10000, // Refresh every 10 seconds
+    refetchInterval: 30000, // Refresh every 30 seconds instead of 10
+    retry: 2, // Limit retries to 2
+    retryDelay: 5000, // Wait 5 seconds between retries
   });
 
   const { data: latestReading } = useQuery<SensorReading | null>({
     queryKey: ["/api/sensor-readings/latest"],
-    refetchInterval: 10000, // Refresh every 10 seconds
+    refetchInterval: 30000, // Refresh every 30 seconds instead of 10
+    retry: 2, // Limit retries to 2
+    retryDelay: 5000, // Wait 5 seconds between retries
   });
 
   const { data: systemStatus } = useQuery<SystemStatus>({
     queryKey: ["/api/system-status"],
-    refetchInterval: 10000, // Refresh every 10 seconds
+    refetchInterval: 30000, // Refresh every 30 seconds instead of 10
+    retry: 2, // Limit retries to 2
+    retryDelay: 5000, // Wait 5 seconds between retries
   });
 
   // Connection status component

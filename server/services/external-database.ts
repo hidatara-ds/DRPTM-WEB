@@ -70,9 +70,9 @@ export class ExternalDatabaseService {
   async fetchLatestReading(): Promise<ExternalDatabaseReading | null> {
     try {
       console.log(`Fetching data from: ${this.apiUrl}`);
-      // Implement timeout using AbortController
+      // Implement timeout using AbortController with shorter timeout
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+      const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
       let response;
       try {
         response = await fetch(this.apiUrl, {
@@ -145,7 +145,11 @@ export class ExternalDatabaseService {
 
       return adaptedData;
     } catch (error) {
-      console.error("Error fetching data from external database:", error);
+      if (error instanceof Error && error.name === 'AbortError') {
+        console.error("Request timeout: External database API did not respond within 5 seconds");
+      } else {
+        console.error("Error fetching data from external database:", error);
+      }
       return null;
     }
   }
