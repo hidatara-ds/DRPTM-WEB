@@ -4,6 +4,7 @@ import { storage } from "./storage";
 import {
   insertSensorReadingSchema,
   insertAlertSettingsSchema,
+  sensorReadingSchema,
 } from "@shared/schema";
 
 

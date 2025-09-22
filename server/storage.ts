@@ -16,7 +16,7 @@ export interface IStorage {
 
   // Alert settings
   getAlertSettings(): Promise<AlertSettings>;
-  updateAlertSettings(settings: AlertSettings): Promise<AlertSettings>;
+  updateAlertSettings(settings: Partial<AlertSettings>): Promise<AlertSettings>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -26,7 +26,7 @@ export class DatabaseStorage implements IStorage {
   private fallbackData = {
     systemStatus: {
       id: 'fallback',
-      connectionStatus: 'connected' as const,
+      connectionStatus: 'disconnected' as const,
       lastUpdate: new Date(),
       dataPoints: 0,
       cpuUsage: 23,
@@ -47,7 +47,25 @@ export class DatabaseStorage implements IStorage {
     // Initialize defaults safely
     this.initializeDefaults().catch(() => {
       console.log('🔄 Running in fallback mode without database persistence');
+      // Ensure we always have sample data in fallback mode
+      this.initializeFallbackData();
     });
+  }
+
+  private initializeFallbackData() {
+    // Always ensure we have sample data in fallback mode
+    if (this.fallbackData.sensorReadings.length === 0) {
+      console.log('🔄 Initializing fallback sample data');
+      const sampleReading: SensorReading = {
+        id: `sample_${Date.now()}`,
+        timestamp: new Date(),
+        createdAt: new Date(),
+        temperature: 25.5,
+        ph: 6.8,
+        tdsLevel: 450
+      };
+      this.fallbackData.sensorReadings = [sampleReading];
+    }
   }
 
   private async initializeDefaults() {
@@ -55,11 +73,16 @@ export class DatabaseStorage implements IStorage {
       const { db, available } = getDatabaseConnection();
       if (!available || !db) {
         this.databaseAvailable = false;
+        // Initialize fallback data when database is not available
+        this.initializeFallbackData();
         return;
       }
       
       // Test database connection first
       await db.select().from(systemStatus).limit(1);
+      
+      // Initialize fallback data as backup
+      this.initializeFallbackData();
       
       // Check if system status exists, if not create default
       const statusCount = await db.select().from(systemStatus).limit(1);
@@ -89,6 +112,8 @@ export class DatabaseStorage implements IStorage {
     } catch (error) {
       console.warn('⚠️ Database not available, using in-memory fallback:', (error as Error).message);
       this.databaseAvailable = false;
+      // Initialize fallback data when database is not available
+      this.initializeFallbackData();
     }
   }
 
@@ -152,7 +177,7 @@ export class DatabaseStorage implements IStorage {
       }
       
       // Return data without storing if DB unavailable (fetch time already updated)
-      return {
+      const reading = {
         id: `external_${now}`,
         timestamp: new Date(),
         createdAt: new Date(),
@@ -160,8 +185,14 @@ export class DatabaseStorage implements IStorage {
         ph: externalData.ph,
         tdsLevel: externalData.tdsLevel
       };
+      
+      // Store in fallback data for consistency
+      this.fallbackData.sensorReadings.unshift(reading);
+      return reading;
     } catch (error) {
       console.error("Error fetching from external database:", error);
+      // Ensure we have fallback data even when external fetch fails
+      this.initializeFallbackData();
       return null;
     }
   }
@@ -172,18 +203,7 @@ export class DatabaseStorage implements IStorage {
 
     if (!this.databaseAvailable) {
       // Return fallback data if no database
-      if (this.fallbackData.sensorReadings.length === 0) {
-        console.log('🔄 Providing sample data (fallback mode)');
-        const sampleReading: SensorReading = {
-          id: `sample_${Date.now()}`,
-          timestamp: new Date(),
-          createdAt: new Date(),
-          temperature: 25.5,
-          ph: 6.8,
-          tdsLevel: 450
-        };
-        this.fallbackData.sensorReadings = [sampleReading];
-      }
+      this.initializeFallbackData();
       return this.fallbackData.sensorReadings.slice(0, limit);
     }
 
@@ -192,18 +212,7 @@ export class DatabaseStorage implements IStorage {
       if (!available || !dbInstance) {
         this.databaseAvailable = false;
         // Return fallback data directly instead of recursive call
-        if (this.fallbackData.sensorReadings.length === 0) {
-          console.log('🔄 Providing sample data (fallback mode)');
-          const sampleReading: SensorReading = {
-            id: `sample_${Date.now()}`,
-            timestamp: new Date(),
-            createdAt: new Date(),
-            temperature: 25.5,
-            ph: 6.8,
-            tdsLevel: 450
-          };
-          this.fallbackData.sensorReadings = [sampleReading];
-        }
+        this.initializeFallbackData();
         return this.fallbackData.sensorReadings.slice(0, limit);
       }
       
@@ -233,16 +242,8 @@ export class DatabaseStorage implements IStorage {
         } else {
           // In production, return in-memory fallback instead of persisting
           console.log('No data available, using in-memory fallback (production mode)');
-          const sampleReading: SensorReading = {
-            id: `fallback_${Date.now()}`,
-            timestamp: new Date(),
-            createdAt: new Date(),
-            temperature: 25.5,
-            ph: 6.8,
-            tdsLevel: 450
-          };
-          this.fallbackData.sensorReadings = [sampleReading];
-          return [sampleReading];
+          this.initializeFallbackData();
+          return this.fallbackData.sensorReadings.slice(0, limit);
         }
       }
 
@@ -250,7 +251,8 @@ export class DatabaseStorage implements IStorage {
     } catch (error) {
       console.warn('Database error, falling back to sample data:', (error as Error).message);
       this.databaseAvailable = false;
-      return this.getSensorReadings(limit);
+      this.initializeFallbackData();
+      return this.fallbackData.sensorReadings.slice(0, limit);
     }
   }
 
@@ -261,6 +263,7 @@ export class DatabaseStorage implements IStorage {
     const { db, available } = getDatabaseConnection();
     if (!available || !db) {
       console.warn('Database not available for time range query, returning fallback data');
+      this.initializeFallbackData();
       return this.fallbackData.sensorReadings;
     }
 
@@ -281,6 +284,7 @@ export class DatabaseStorage implements IStorage {
     } catch (error) {
       console.warn('Database error in time range query:', (error as Error).message);
       this.databaseAvailable = false;
+      this.initializeFallbackData();
       return this.fallbackData.sensorReadings;
     }
   }
@@ -289,6 +293,7 @@ export class DatabaseStorage implements IStorage {
     const { db, available } = getDatabaseConnection();
     if (!available || !db) {
       // Return in-memory data if DB unavailable
+      this.initializeFallbackData();
       const reading: SensorReading = {
         id: `memory_${Date.now()}`,
         timestamp: new Date(),
@@ -316,6 +321,7 @@ export class DatabaseStorage implements IStorage {
       console.warn('Failed to create reading in database:', (error as Error).message);
       this.databaseAvailable = false;
       // Fallback to in-memory
+      this.initializeFallbackData();
       const reading: SensorReading = {
         id: `memory_${Date.now()}`,
         timestamp: new Date(),
@@ -330,6 +336,7 @@ export class DatabaseStorage implements IStorage {
   async getSystemStatus(): Promise<SystemStatus> {
     const { db: dbInstance, available } = getDatabaseConnection();
     if (!available || !dbInstance) {
+      this.databaseAvailable = false;
       return this.fallbackData.systemStatus;
     }
 
@@ -361,6 +368,7 @@ export class DatabaseStorage implements IStorage {
     const { db: dbInstance, available } = getDatabaseConnection();
     if (!available || !dbInstance) {
       // Update fallback data and return it
+      this.databaseAvailable = false;
       Object.assign(this.fallbackData.systemStatus, statusUpdate, { lastUpdate: new Date() });
       return this.fallbackData.systemStatus;
     }
@@ -404,6 +412,7 @@ export class DatabaseStorage implements IStorage {
   async getAlertSettings(): Promise<AlertSettings> {
     const { db: dbInstance, available } = getDatabaseConnection();
     if (!available || !dbInstance) {
+      this.databaseAvailable = false;
       return this.fallbackData.alertSettings;
     }
 
@@ -427,10 +436,11 @@ export class DatabaseStorage implements IStorage {
     }
   }
 
-  async updateAlertSettings(newSettings: AlertSettings): Promise<AlertSettings> {
+  async updateAlertSettings(newSettings: Partial<AlertSettings>): Promise<AlertSettings> {
     const { db: dbInstance, available } = getDatabaseConnection();
     if (!available || !dbInstance) {
       // Update fallback data and return it
+      this.databaseAvailable = false;
       Object.assign(this.fallbackData.alertSettings, newSettings);
       return this.fallbackData.alertSettings;
     }
@@ -443,9 +453,9 @@ export class DatabaseStorage implements IStorage {
         const [created] = await dbInstance
           .insert(alertSettings)
           .values({
-            temperatureAlerts: newSettings.temperatureAlerts,
-            phAlerts: newSettings.phAlerts,
-            tdsLevelAlerts: newSettings.tdsLevelAlerts,
+            temperatureAlerts: newSettings.temperatureAlerts ?? true,
+            phAlerts: newSettings.phAlerts ?? true,
+            tdsLevelAlerts: newSettings.tdsLevelAlerts ?? false,
           })
           .returning();
         return created;
@@ -454,9 +464,9 @@ export class DatabaseStorage implements IStorage {
       const [updated] = await dbInstance
         .update(alertSettings)
         .set({
-          temperatureAlerts: newSettings.temperatureAlerts,
-          phAlerts: newSettings.phAlerts,
-          tdsLevelAlerts: newSettings.tdsLevelAlerts,
+          temperatureAlerts: newSettings.temperatureAlerts ?? currentSettings.temperatureAlerts,
+          phAlerts: newSettings.phAlerts ?? currentSettings.phAlerts,
+          tdsLevelAlerts: newSettings.tdsLevelAlerts ?? currentSettings.tdsLevelAlerts,
         })
         .where(eq(alertSettings.id, currentSettings.id))
         .returning();
