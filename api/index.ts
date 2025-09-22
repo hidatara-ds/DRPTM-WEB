@@ -7,13 +7,15 @@ const app = express();
 // Enable CORS for Vercel
 app.use(cors({
   origin: true,
-  credentials: true
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: ['X-CSRF-Token', 'X-Requested-With', 'Accept', 'Accept-Version', 'Content-Length', 'Content-MD5', 'Content-Type', 'Date', 'X-Api-Version']
 }));
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
-// Initialize routes immediately
+// Initialize routes synchronously
 let routesInitialized = false;
 
 const initializeRoutes = async () => {
@@ -30,7 +32,7 @@ const initializeRoutes = async () => {
   }
 };
 
-// Initialize routes on startup
+// Initialize routes immediately
 initializeRoutes().catch((error) => {
   console.error("Critical error during route initialization:", error);
 });
@@ -44,7 +46,7 @@ app.use(async (req, res, next) => {
     console.error("Route initialization error:", error);
     return res.status(500).json({ 
       error: "Server initialization failed",
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+      details: process.env.NODE_ENV === 'development' ? (error as Error).message : undefined
     });
   }
 });
