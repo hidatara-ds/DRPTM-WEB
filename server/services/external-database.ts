@@ -1,3 +1,5 @@
+// externalDatabase.service.ts
+
 export interface ExternalDatabaseReading {
   id: string;
   temperature: number;
@@ -6,192 +8,265 @@ export interface ExternalDatabaseReading {
   timestamp: string;
 }
 
+type FetchAttemptOptions = {
+  url: string;
+  headers: Record<string, string>;
+  timeoutMs: number;
+};
+
 export class ExternalDatabaseService {
   private apiUrl: string;
   private apiKey: string;
   private cfAccessClientId?: string;
   private cfAccessClientSecret?: string;
+  private allowQueryKeyFallback: boolean;
+  private timeoutMs: number;
+  private maxAttempts: number;
 
-  constructor(apiUrl: string, apiKey: string) {
-    this.apiUrl = apiUrl;
+  /**
+   * @param baseUrl bisa langsung full URL endpoint
+   *   (contoh: https://app.up.railway.app/api/latest-readings/HZ1)
+   *   atau cukup origin (contoh: https://app.up.railway.app) + deviceCode di env.
+   * @param apiKey API key yang sama dengan API_KEY di service Railway (server).
+   */
+  constructor(baseUrl: string, apiKey: string) {
+    // ---- Compose URL yang benar ----
+    const trimmed = (baseUrl || "").trim();
+    const deviceFromEnv =
+      process.env.EXTERNAL_DB_DEVICE ||
+      process.env.DEVICE_CODE ||
+      "HZ1"; // default aman
+
+    // Jika baseUrl sudah langsung endpoint -> pakai apa adanya.
+    // Kalau baseUrl hanya origin, build ke /api/latest-readings/:device
+    if (/\/api\/latest-readings\//i.test(trimmed)) {
+      this.apiUrl = trimmed.replace(/\/+$/, "");
+    } else {
+      const origin = trimmed.replace(/\/+$/, "");
+      this.apiUrl = `${origin}/api/latest-readings/${deviceFromEnv}`;
+    }
+
     this.apiKey = apiKey;
+
+    // Optional (Cloudflare Access)
     this.cfAccessClientId = process.env.CF_ACCESS_CLIENT_ID;
     this.cfAccessClientSecret = process.env.CF_ACCESS_CLIENT_SECRET;
+
+    // Konfigurasi umum
+    this.allowQueryKeyFallback =
+      (process.env.ALLOW_QUERY_KEY_FALLBACK || "true").toLowerCase() === "true";
+    this.timeoutMs = Number(process.env.EXT_API_TIMEOUT_MS || 10000); // 10s
+    this.maxAttempts = Number(process.env.EXT_API_MAX_ATTEMPTS || 2); // 2x
   }
 
-  // Decode HEX data based on device code
+  // ----- Decoder HEX per jenis device -----
   private decodeHexData(hexString: string, deviceCode: string) {
     try {
-      console.log(`Decoding hex data: ${hexString} for device: ${deviceCode}`);
+      const hex = (hexString || "").toLowerCase();
+      if (!hex || hex.length < 6) return null;
 
       if (deviceCode.startsWith("CZ")) {
         // Cabai (4 sensors)
         return {
-          ph: parseInt(hexString.substr(0, 4), 16) / 100,
-          moisture: parseInt(hexString.substr(4, 4), 16) / 10,
-          ec: parseInt(hexString.substr(8, 4), 16) / 100,
-          temperature: parseInt(hexString.substr(12, 4), 16) / 10,
+          ph: parseInt(hex.substring(0, 4), 16) / 100,
+          moisture: parseInt(hex.substring(4, 8), 16) / 10,
+          ec: parseInt(hex.substring(8, 12), 16) / 100,
+          temperature: parseInt(hex.substring(12, 16), 16) / 10,
         };
       }
 
       if (deviceCode.startsWith("MZ") || deviceCode.startsWith("SZ")) {
         // Melon/Selada (3 sensors)
         return {
-          ph: parseInt(hexString.substr(0, 4), 16) / 100,
-          ec: parseInt(hexString.substr(4, 4), 16) / 100,
-          temperature: parseInt(hexString.substr(8, 4), 16) / 10,
+          ph: parseInt(hex.substring(0, 4), 16) / 100,
+          ec: parseInt(hex.substring(4, 8), 16) / 100,
+          temperature: parseInt(hex.substring(8, 12), 16) / 10,
         };
       }
 
       if (deviceCode.startsWith("GZ")) {
         // Greenhouse (3 sensors)
         return {
-          temperature: parseInt(hexString.substr(0, 4), 16) / 10,
-          humidity: parseInt(hexString.substr(4, 4), 16) / 10,
-          light: parseInt(hexString.substr(8, 4), 16),
+          temperature: parseInt(hex.substring(0, 4), 16) / 10,
+          humidity: parseInt(hex.substring(4, 8), 16) / 10,
+          light: parseInt(hex.substring(8, 12), 16),
         };
       }
 
       if (deviceCode.startsWith("HZ")) {
-        // Hydroponic (3 sensors - pH, TDS/EC, Temperature)
+        // Hydroponic (pH, TDS/EC, Temperature)
         return {
-          ph: parseInt(hexString.substr(0, 4), 16) / 100,
-          tdsLevel: parseInt(hexString.substr(4, 4), 16) / 10, // TDS level
-          temperature: parseInt(hexString.substr(8, 4), 16) / 10,
+          ph: parseInt(hex.substring(0, 4), 16) / 100,
+          tdsLevel: parseInt(hex.substring(4, 8), 16) / 10,
+          temperature: parseInt(hex.substring(8, 12), 16) / 10,
         };
       }
 
-      console.warn(
-        `Unknown device code: ${deviceCode}, cannot decode hex data`
-      );
+      // Unknown prefix
       return null;
-    } catch (error) {
-      console.error("Error decoding hex data:", error);
+    } catch {
       return null;
+    }
+  }
+
+  // ----- Fetch dengan timeout -----
+  private async attemptFetch(opts: FetchAttemptOptions) {
+    const controller = new AbortController();
+    const t = setTimeout(() => controller.abort(), opts.timeoutMs);
+    try {
+      const res = await fetch(opts.url, {
+        method: "GET",
+        headers: opts.headers,
+        redirect: "follow",
+        signal: controller.signal,
+      });
+      return res;
+    } finally {
+      clearTimeout(t);
     }
   }
 
   async fetchLatestReading(): Promise<ExternalDatabaseReading | null> {
-    try {
-      console.log(`Fetching data from: ${this.apiUrl}`);
-      // Implement timeout using AbortController with longer timeout and basic retry
-      const attemptFetch = async (attempt: number) => {
-        const controller = new AbortController();
-        const timeoutMs = 10000; // 10s per attempt
-        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-        try {
-          const headers: Record<string, string> = {
-            "X-API-KEY": this.apiKey,
-            "Content-Type": "application/json",
-            Accept: "application/json",
-            "User-Agent": "HydroMonitor/1.0",
-          };
-          if (this.cfAccessClientId && this.cfAccessClientSecret) {
-            headers["CF-Access-Client-Id"] = this.cfAccessClientId;
-            headers["CF-Access-Client-Secret"] = this.cfAccessClientSecret;
-          }
+    const baseHeaders: Record<string, string> = {
+      "X-API-KEY": this.apiKey,
+      "Content-Type": "application/json",
+      Accept: "application/json",
+      "User-Agent": "HydroMonitor/1.0",
+    };
+    if (this.cfAccessClientId && this.cfAccessClientSecret) {
+      baseHeaders["CF-Access-Client-Id"] = this.cfAccessClientId;
+      baseHeaders["CF-Access-Client-Secret"] = this.cfAccessClientSecret;
+    }
 
-          const res = await fetch(this.apiUrl, {
-            method: "GET",
-            headers,
-            redirect: "follow",
-            signal: controller.signal,
+    let response: Response | null = null;
+    let urlToHit = this.apiUrl;
+
+    // --- Coba dengan header; jika 401 & diizinkan, fallback pakai ?key=... (buat tes via browser/proxy) ---
+    for (let attempt = 1; attempt <= this.maxAttempts; attempt++) {
+      try {
+        response = await this.attemptFetch({
+          url: urlToHit,
+          headers: baseHeaders,
+          timeoutMs: this.timeoutMs,
+        });
+
+        // Kalau unauthorized & fallback diizinkan → coba ulang pakai query key
+        if (
+          response.status === 401 &&
+          this.allowQueryKeyFallback &&
+          !/[?&]key=/.test(urlToHit)
+        ) {
+          const sep = urlToHit.includes("?") ? "&" : "?";
+          urlToHit = `${urlToHit}${sep}key=${encodeURIComponent(this.apiKey)}`;
+          // lakukan 1x percobaan lagi langsung
+          response = await this.attemptFetch({
+            url: urlToHit,
+            headers: { ...baseHeaders, "X-API-KEY": "" }, // kosongkan header supaya jelas tes via query
+            timeoutMs: this.timeoutMs,
           });
-          return res;
-        } catch (err) {
-          if (err instanceof Error && err.name === 'AbortError') {
-            console.error(`Request timeout after ${timeoutMs}ms on attempt ${attempt}`);
-          }
-          throw err;
-        } finally {
-          clearTimeout(timeoutId);
         }
-      };
 
-      let response: any = null;
-      const maxAttempts = 2;
-      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-        try {
-          response = await attemptFetch(attempt);
-          break;
-        } catch (e) {
-          if (attempt === maxAttempts) throw e;
-          await new Promise(r => setTimeout(r, 300 * attempt));
+        break; // keluar loop jika sudah dapat response
+      } catch (err: any) {
+        if (err?.name === "AbortError" && attempt < this.maxAttempts) {
+          await new Promise((r) => setTimeout(r, 300 * attempt));
+          continue;
         }
+        throw err;
       }
+    }
 
-      if (!response) {
-        throw new Error("No response received from external database");
-      }
+    if (!response) throw new Error("No response from external database");
 
-      console.log(`Response status: ${response.status} ${response.statusText}`);
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      throw new Error(
+        `External DB error: ${response.status} ${response.statusText} ${text}`
+      );
+    }
 
-      if (!response.ok) {
-        // Log more details about the error
-        const errorText = await response.text();
-        console.error(`API Error Details: ${errorText}`);
-        throw new Error(
-          `External database API error: ${response.status} ${response.statusText} - ${errorText}`
-        );
-      }
+    const ct = response.headers.get("content-type") || "";
+    if (!ct.includes("application/json")) {
+      throw new Error(`Expected JSON, got ${ct}`);
+    }
 
-      const contentType = response.headers.get("content-type");
-      if (!contentType || !contentType.includes("application/json")) {
-        throw new Error(`Expected JSON response but got ${contentType}`);
-      }
+    const data = (await response.json()) as any;
 
-      const data = await response.json();
-      console.log("Received data:", data);
+    // Bentuk 1 (langsung payload decoding):
+    let deviceCode =
+      data.device_code ||
+      data.device ||
+      data.code ||
+      process.env.EXTERNAL_DB_DEVICE ||
+      "UNKNOWN";
 
-      // Extract device code and encoded data
-      const deviceCode = data.device_code || "UNKNOWN";
-      const encodedData = data.reading?.encoded_data;
+    // Bentuk 2 (kalau server membungkus data di 'reading'):
+    const encodedData =
+      data.reading?.encoded_data ??
+      data.encoded_data ??
+      data.hex ??
+      data.payload;
 
-      if (!encodedData) {
-        console.error("No encoded_data found in response:", data);
-        return null;
-      }
-
-      // Decode the hex data
-      const decodedData = this.decodeHexData(encodedData, deviceCode);
-
-      if (!decodedData) {
-        console.error("Failed to decode hex data for device:", deviceCode);
-        return null;
-      }
-
-      console.log("Decoded sensor data:", decodedData);
-
-      // Adapt decoded data to our schema
-      const adaptedData = {
-        id: data.id || data._id || data.reading_id || `ext_${Date.now()}`,
-        temperature: decodedData.temperature || 0,
-        ph: decodedData.ph || 0,
-        tdsLevel: decodedData.tdsLevel || decodedData.ec || 0, // Use TDS or EC as fallback
-        timestamp:
-          data.reading?.timestamp ||
-          data.timestamp ||
-          data.created_at ||
-          data.time ||
-          new Date().toISOString(),
-      };
-
-      console.log("Final adapted data:", adaptedData);
-
-      return adaptedData;
-    } catch (error) {
-      if (error instanceof Error && error.name === 'AbortError') {
-        console.error("Request timeout: External database API did not respond within 5 seconds");
-      } else {
-        console.error("Error fetching data from external database:", error);
+    if (!encodedData) {
+      // Bisa jadi server sudah mengembalikan schema final (tanpa hex)
+      if (
+        typeof data.temperature === "number" &&
+        ("ph" in data || "tdsLevel" in data || "ec" in data)
+      ) {
+        return {
+          id: data.id || data._id || `ext_${Date.now()}`,
+          temperature: Number(data.temperature) || 0,
+          ph: Number(data.ph) || 0,
+          tdsLevel: Number(data.tdsLevel ?? data.ec ?? 0) || 0,
+          timestamp:
+            data.timestamp || data.created_at || data.time || new Date().toISOString(),
+        };
       }
       return null;
     }
+
+    // Decode HEX → adapt ke schema
+    const decoded = this.decodeHexData(String(encodedData), String(deviceCode));
+    if (!decoded) return null;
+
+    const adapted: ExternalDatabaseReading = {
+      id:
+        data.id ||
+        data._id ||
+        data.reading_id ||
+        data.reading?.id ||
+        `ext_${Date.now()}`,
+      temperature: Number(decoded.temperature ?? 0) || 0,
+      ph: Number(decoded.ph ?? 0) || 0,
+      tdsLevel: Number(decoded.tdsLevel ?? decoded.ec ?? 0) || 0,
+      timestamp:
+        data.reading?.timestamp ||
+        data.timestamp ||
+        data.created_at ||
+        data.time ||
+        new Date().toISOString(),
+    };
+
+    return adapted;
   }
 }
 
-export const externalDatabaseService = new ExternalDatabaseService(
+// --------------------
+// SINGLETON INSTANCE
+// --------------------
+// ENV yang dipakai:
+// - EXTERNAL_DB_API_URL  → bisa origin (https://app.up.railway.app) atau full endpoint
+// - EXTERNAL_DB_DEVICE   → default: HZ1 (kalau EXTERNAL_DB_API_URL bukan endpoint langsung)
+// - EXTERNAL_DB_API_KEY  → kalau tidak ada, fallback ke API_KEY (server)
+const EXTERNAL_URL =
   process.env.EXTERNAL_DB_API_URL ||
-    "https://web-production-e195b.up.railway.app/api/latest-readings/HZ1",
-  process.env.EXTERNAL_DB_API_KEY || "ithinkyouthinktoomuchofme"
+  process.env.EXTERNAL_DB_ORIGIN ||
+  "https://web-production-e195b.up.railway.app"; // origin; akan dibentuk /api/latest-readings/HZ1
+
+const EXTERNAL_KEY =
+  process.env.EXTERNAL_DB_API_KEY || process.env.API_KEY || "";
+
+export const externalDatabaseService = new ExternalDatabaseService(
+  EXTERNAL_URL,
+  EXTERNAL_KEY
 );
